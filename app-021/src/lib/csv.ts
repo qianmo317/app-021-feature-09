@@ -1,6 +1,18 @@
 import type { ClassEntity } from '../types'
 import type { FairnessReport } from './fairness'
 import { buildSeatIndex } from './layout'
+import {
+  avgScoreRangeHint,
+  caliberLines,
+  csvColumnNotes,
+  csvHeaderComments,
+  DESKMATE_DEF,
+  FRONT_RANGE_DEF,
+  HARD_DEF,
+  HEIGHT_DEF,
+  VARIANCE_DEF,
+  WEEKS_DEF,
+} from './metrics'
 
 // CSV 导出（带 BOM，Excel 直接打开不乱码）
 export function toCSV(rows: (string | number)[][]): string {
@@ -21,16 +33,53 @@ export function downloadCSV(filename: string, rows: (string | number)[][]): void
   URL.revokeObjectURL(url)
 }
 
-// 全班统计表（导出给家长看）
+// 全班统计表（导出给家长看）：头部先放「报告口径 + 指标定义」注释，再放数据表
 export function fairnessCSV(cls: ClassEntity, report: FairnessReport): (string | number)[][] {
   const rows: (string | number)[][] = []
-  rows.push([`班级：${cls.name}`])
-  rows.push([`统计周数：${report.totalWeeks}`])
+
+  // —— 头部注释：这份数字是在哪套配置下、用什么算法算出来的 ——
+  rows.push([`# 班级：${cls.name} · 公平性报告`])
+  rows.push([`# 导出时间：${new Date().toLocaleString('zh-CN')}`])
+  const groupLines: string[] = []
+  for (const g of report.caliber.groups) {
+    groupLines.push(...caliberLines(g))
+  }
+  if (!report.caliber.currentMatches) {
+    groupLines.push(
+      `注意：本报告主口径与班级当前配置不一致（${report.caliber.diffs
+        .map((d) => `${d.label} ${d.oldV}→${d.newV}`)
+        .join('；')}），以下统计仍按生成时的早先配置计算。`,
+    )
+  }
+  rows.push(
+    ...csvHeaderComments({
+      caliber: groupLines,
+      metrics: [WEEKS_DEF, HARD_DEF, FRONT_RANGE_DEF, VARIANCE_DEF, DESKMATE_DEF, HEIGHT_DEF],
+      avgHint: avgScoreRangeHint(report.layoutRows, report.layoutCols),
+    }).map((line) => [line]),
+  )
+  rows.push([])
+
+  // —— 全班汇总 ——
+  rows.push(['汇总指标', '数值', '说明'])
+  rows.push([WEEKS_DEF.label, report.totalWeeks, WEEKS_DEF.def])
+  rows.push([HARD_DEF.label, report.hardViolations.length, HARD_DEF.def])
+  rows.push([FRONT_RANGE_DEF.label, report.frontRowsRange, `${FRONT_RANGE_DEF.def} ${FRONT_RANGE_DEF.good ?? ''}`])
+  rows.push([VARIANCE_DEF.label, report.variance.toFixed(1), `${VARIANCE_DEF.def} ${VARIANCE_DEF.good ?? ''}`])
+  rows.push([DESKMATE_DEF.label, report.deskmateOverLimit.length, DESKMATE_DEF.def])
+  rows.push([
+    HEIGHT_DEF.label,
+    report.heightViolations,
+    `${HEIGHT_DEF.def}${report.caliber.primary.snap && !report.caliber.primary.snap.heightRule ? '（生成时未启用）' : ''}`,
+  ])
+  rows.push([])
+
+  // —— 逐人明细 ——
   rows.push([
     '姓名',
     '身高(cm)',
     '视力状况',
-    `前${cls.constraints.frontRows}排次数`,
+    `前${report.frontRows}排次数`,
     '前排次数',
     '中排次数',
     '后排次数',
@@ -59,9 +108,9 @@ export function fairnessCSV(cls: ClassEntity, report: FairnessReport): (string |
     ])
   }
   rows.push([])
-  rows.push(['位置分说明：位置分 = 前后排权重(0~2，越小越靠前) + 中间度权重(0~1，越小越靠中间)，分数越低位置越好'])
+  rows.push(...csvColumnNotes(report.frontRows, report.layoutCols).map((line) => [line]))
   if (report.deskmateOverLimit.length) {
-    rows.push(['同桌超限对：', ...report.deskmateOverLimit.map((d) => `${d.a}-${d.b}(${d.count}次)`)])
+    rows.push(['# 同桌超限对：', ...report.deskmateOverLimit.map((d) => `${d.a}-${d.b}(${d.count}次)`)])
   }
   return rows
 }

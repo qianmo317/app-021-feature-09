@@ -19,8 +19,21 @@ describe('CSV 导出', () => {
     const report = computeFairness(cls)
     const f = fairnessCSV(cls, report)
     expect(f[0][0]).toContain(cls.name)
-    expect(f[3]).toHaveLength(12) // 表头列数
-    expect(f).toHaveLength(3 + 12 + 2) // 班级/周数/表头 + 12 行学生 + 空行 + 说明
+    // 头部注释：口径与每个指标的算法说明都要带上
+    const flat = f.map((r) => r.join(','))
+    expect(flat.some((l) => l.startsWith('#') && l.includes('3 排 × 4 列'))).toBe(true)
+    expect(flat.some((l) => l.includes('随机种子：8'))).toBe(true)
+    expect(flat.some((l) => l.includes('位置分 Σ偏差²'))).toBe(true)
+    expect(flat.some((l) => l.includes('同桌超 2 次的对'))).toBe(true)
+    // 逐人表头 12 列，且其后恰好 12 行学生
+    const headerIdx = f.findIndex((r) => r[0] === '姓名')
+    expect(headerIdx).toBeGreaterThan(2)
+    expect(f[headerIdx]).toHaveLength(12)
+    const studentRows = f.slice(headerIdx + 1, headerIdx + 1 + 12)
+    expect(studentRows).toHaveLength(12)
+    expect(studentRows.every((r) => r.length === 12)).toBe(true)
+    // 尾部列说明
+    expect(flat.some((l) => l.includes('列说明：平均位置分'))).toBe(true)
     const w = weeksCSV(cls)
     expect(w.length).toBeGreaterThan(cls.assignments.length)
     // 每周都有 12 个座位记录

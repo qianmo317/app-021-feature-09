@@ -127,8 +127,24 @@ test('完整旅程：录学生 → 生成 4 周 → 可复现 → 拖拽交换�
   await expect(page.getByTestId('fair-hard')).toContainText('0')
   await expect(page.getByTestId('fairness-table').locator('[data-testid="fairness-row"]')).toHaveCount(9)
   await expect(page.getByTestId('bar-chart').locator('[data-testid="bar-row"]')).toHaveCount(9)
+  // 报告自带口径说明：行列/前排数/周数/种子，以及指标定义
+  await expect(page.getByTestId('caliber-lines')).toContainText(/6 排 ×\s*7 列/)
+  await expect(page.getByTestId('caliber-lines')).toContainText('前排口径：前 2 排')
+  await expect(page.getByTestId('caliber-lines')).toContainText('随机种子：42')
+  await expect(page.locator('.def-tip')).not.toHaveCount(0)
   const [dl1] = await Promise.all([page.waitForEvent('download'), page.getByTestId('export-csv').click()])
   expect(dl1.suggestedFilename()).toContain('公平性统计.csv')
+  // CSV 头部带口径注释，不只是数字
+  const csvText = await dl1
+    .createReadStream()
+    .then(async (stream) => {
+      const chunks: Buffer[] = []
+      for await (const c of stream) chunks.push(c as Buffer)
+      return Buffer.concat(chunks).toString('utf-8')
+    })
+  expect(csvText).toContain('# 本报告各项数字的统计口径与算法说明')
+  expect(csvText).toContain('随机种子：42')
+  expect(csvText).toContain('越小越平')
 
   // 打印页：4 周各一页 + 打印按钮可点（headless 下 no-op）
   await page.getByRole('link', { name: '打印', exact: true }).click()

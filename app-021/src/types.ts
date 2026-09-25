@@ -34,10 +34,27 @@ export interface Student {
 export type SeatId = string
 export type StudentId = string
 
+// 生成口径快照：这份周次表是「在哪套配置/算法下」生成的。
+// 报告统计时以各周自己的快照为准，配置被改动后旧报告仍可还原早先口径。
+export interface GenSnapshot {
+  schema: 1
+  rows: number
+  cols: number
+  aisles: number[]
+  mode: 'rows' | 'groups'
+  frontRows: number
+  heightRule: boolean
+  mixTiers: boolean
+  weeks: number // 生成时计划的总周数
+  seed: number // 生成实际使用的种子
+  createdAt: number // 生成时刻（ms）；旧数据无快照时为 0
+}
+
 export interface Assignment {
   week: number // 从 1 开始
   map: Record<SeatId, StudentId>
   score: { fairness: number; repeats: number }
+  gen?: GenSnapshot // 生成口径快照（早期数据可能缺失）
 }
 
 export interface Constraints {

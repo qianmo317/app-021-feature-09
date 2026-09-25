@@ -179,7 +179,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             assignments = generateMissingWeeks(working, { seed: opts?.seed })
             break
         }
-        working.assignments = assignments
+        working.assignments = assignments.map((a) =>
+          a.gen && a.gen.createdAt === 0 ? { ...a, gen: { ...a.gen, createdAt: Date.now() } } : a,
+        )
         await persist(working)
         return { ok: true }
       } catch (e) {

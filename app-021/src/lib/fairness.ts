@@ -1,5 +1,6 @@
-import type { ClassEntity, Seat, Student, StudentId } from '../types'
-import { buildSeatIndex, middleColSet, positionScore } from './layout'
+import type { Assignment, ClassEntity, GenSnapshot, LayoutConfig, Seat, Student, StudentId } from '../types'
+import { buildSeats, buildSeatIndex, middleColSet, positionScore, type SeatIndex } from './layout'
+import { currentSnapshot, diffCaliber, isSameCaliber, LEGACY_KEY, snapshotKey, type CaliberDiff } from './snapshot'
 
 // ================= 公平性报告（§4.4 / §10） =================
 
@@ -10,7 +11,7 @@ export interface DeskmateStat {
 
 export interface FairnessRow {
   student: Student
-  frontRowsCount: number // 前 N 排（N = constraints.frontRows）次数
+  frontRowsCount: number // 前 N 排（N = 该周生成时 constraints.frontRows）次数
   frontCount: number // 前 1/3 行次数
   middleCount: number // 中 1/3 行次数
   backCount: number // 后 1/3 行次数
@@ -26,9 +27,31 @@ export interface FairnessViolation {
   detail: string
 }
 
+// 同一种统计口径（生成配置）下的周次分组
+export interface ReportConfigGroup {
+  key: string
+  legacy: boolean // 旧数据：生成时未记录口径，按当前配置回溯计算
+  snap: GenSnapshot | null
+  weeks: number[] // 属于该口径的周次（升序）
+}
+
+export interface ReportCaliber {
+  groups: ReportConfigGroup[] // 按首个周次升序
+  primary: ReportConfigGroup // 报告主口径（含最早周次的一组）
+  mixed: boolean // 是否混用多套口径（分批生成所致）
+  currentMatches: boolean // 主口径是否与当前班级配置一致
+  diffs: CaliberDiff[] // 主口径相对当前配置的差异（currentMatches=false 时非空）
+  legacy: boolean // 主口径是否为旧数据（无快照）
+}
+
 export interface FairnessReport {
   rows: FairnessRow[]
   totalWeeks: number
+  frontRows: number // 主口径的前排数 N（页面/CSV 标签用）
+  frontThird: number // 主口径的前 1/3 行数（条形图图例用）
+  layoutRows: number
+  layoutCols: number
+  caliber: ReportCaliber
   frontRowsRange: number // 「前 N 排」次数极差
   variance: number // 累计位置分方差 × 人数（Σ偏差²）
   std: number
@@ -37,17 +60,60 @@ export interface FairnessReport {
   hardViolations: FairnessViolation[]
 }
 
-function deskmatePairIds(cls: ClassEntity, map: Record<string, string>): [string, string][] {
-  const idx = buildSeatIndex(cls.seats, cls.layout)
+// ---------- 统计口径上下文：某周按哪套布局/约束来解释座位 ----------
+interface CaliberCtx {
+  key: string
+  legacy: boolean
+  layout: LayoutConfig
+  frontRows: number
+  heightRule: boolean
+  seats: Seat[]
+  idx: SeatIndex
+  middleCols: Set<number>
+  hearingRows: number
+  frontThird: number
+}
+
+function ctxFromSnapshot(key: string, snap: GenSnapshot, legacy: boolean): CaliberCtx {
+  const layout: LayoutConfig = {
+    rows: snap.rows,
+    cols: snap.cols,
+    aisles: [...snap.aisles],
+    mode: snap.mode,
+    // doorSide 只影响门/窗标签，不参与公平性统计
+    doorSide: 'right',
+  }
+  const seats = buildSeats(layout)
+  return {
+    key,
+    legacy,
+    layout,
+    frontRows: snap.frontRows,
+    heightRule: snap.heightRule,
+    seats,
+    idx: buildSeatIndex(seats, layout),
+    middleCols: middleColSet(layout),
+    hearingRows: Math.max(1, Math.ceil(layout.rows / 2)),
+    frontThird: Math.max(1, Math.ceil(layout.rows / 3)),
+  }
+}
+
+function ctxFromClass(cls: ClassEntity): CaliberCtx {
+  const snap: GenSnapshot = { ...currentSnapshot(cls), createdAt: 0 }
+  return ctxFromSnapshot(LEGACY_KEY, snap, true)
+}
+
+function deskmatePairIds(ctx: CaliberCtx, map: Record<string, string>): [string, string][] {
+  const idx = ctx.idx
   const byId = idx.byId
   const out: [string, string][] = []
   for (const [seatId, studentId] of Object.entries(map)) {
     const seat = byId.get(seatId)
     if (!seat) continue
-    const si = seat.row * cls.layout.cols + seat.col
+    const si = seat.row * ctx.layout.cols + seat.col
     for (const nb of idx.deskmates[si]) {
       if (nb < si) continue // 去重（按座位下标）
-      const nbSeat = cls.seats[nb]
+      const nbSeat = ctx.seats[nb]
       const other = map[nbSeat.id]
       if (other && other !== studentId) out.push([studentId, other])
     }
@@ -56,43 +122,42 @@ function deskmatePairIds(cls: ClassEntity, map: Record<string, string>): [string
 }
 
 // 某学生某周座位的个体硬约束违反描述（用于报告与手工交换校验）
-export function seatViolationFor(
-  cls: ClassEntity,
-  student: Student,
-  seat: Seat | undefined,
-): string[] {
+function seatViolationForCtx(ctx: CaliberCtx, student: Student, seat: Seat | undefined): string[] {
   if (!seat) return []
   const out: string[] = []
-  if (student.vision === 'front_required' && seat.row >= cls.constraints.frontRows)
+  if (student.vision === 'front_required' && seat.row >= ctx.frontRows)
     out.push(`视力需前排，但被安排在第 ${seat.row + 1} 排`)
-  const mc = middleColSet(cls.layout)
-  if (student.vision === 'middle_required' && !mc.has(seat.col)) out.push('视力需中间，但被安排在边列')
-  if (student.special?.includes('hearing') && seat.row >= Math.ceil(cls.layout.rows / 2))
+  if (student.vision === 'middle_required' && !ctx.middleCols.has(seat.col)) out.push('视力需中间，但被安排在边列')
+  if (student.special?.includes('hearing') && seat.row >= ctx.hearingRows)
     out.push('听力需前排一半，但被安排在后排')
   if (student.special?.includes('mobility')) {
-    const ok = seat.tags.includes('aisle') || seat.col === 0 || seat.col === cls.layout.cols - 1
+    const ok = seat.tags.includes('aisle') || seat.col === 0 || seat.col === ctx.layout.cols - 1
     if (!ok) out.push('行动不便需靠过道，但被安排在中间位')
   }
   if (student.fixedSeatId && student.fixedSeatId !== seat.id) out.push('未坐在固定座位')
   return out
 }
 
+export function seatViolationFor(cls: ClassEntity, student: Student, seat: Seat | undefined): string[] {
+  return seatViolationForCtx(ctxFromClass(cls), student, seat)
+}
+
 // 某周座位表的全部硬约束违反（用于报告与手工交换拦截）
-export function weekHardViolations(cls: ClassEntity, week: number, map: Record<string, string>): string[] {
+function weekHardViolationsCtx(ctx: CaliberCtx, cls: ClassEntity, week: number, map: Record<string, string>): string[] {
   const out: string[] = []
   const byStudent = new Map<StudentId, Seat>()
   for (const [seatId, studentId] of Object.entries(map)) {
-    const seat = cls.seats.find((s) => s.id === seatId)
+    const seat = ctx.idx.byId.get(seatId)
     const student = cls.students.find((s) => s.id === studentId)
     if (seat && student) byStudent.set(studentId, seat)
   }
   for (const student of cls.students) {
     const seat = byStudent.get(student.id)
-    for (const v of seatViolationFor(cls, student, seat)) {
+    for (const v of seatViolationForCtx(ctx, student, seat)) {
       out.push(`第 ${week} 周：${student.name} ${v}`)
     }
   }
-  for (const [a, b] of deskmatePairIds(cls, map)) {
+  for (const [a, b] of deskmatePairIds(ctx, map)) {
     const sa = cls.students.find((s) => s.id === a)
     const sb = cls.students.find((s) => s.id === b)
     if (sa && sb && (sa.mustApartFrom.includes(b) || sb.mustApartFrom.includes(a))) {
@@ -102,24 +167,28 @@ export function weekHardViolations(cls: ClassEntity, week: number, map: Record<s
   return out
 }
 
-// 单周统计（公平性 Σ偏差² 与新增同桌重复对数）
+export function weekHardViolations(cls: ClassEntity, week: number, map: Record<string, string>): string[] {
+  return weekHardViolationsCtx(ctxFromClass(cls), cls, week, map)
+}
+
+// 单周统计（公平性 Σ偏差² 与新增同桌重复对数；始终按当前布局口径）
 export function weekStats(cls: ClassEntity, map: Record<string, string>, excludeWeek: number) {
-  const idx = buildSeatIndex(cls.seats, cls.layout)
+  const ctx = ctxFromClass(cls)
   const scores: number[] = []
   for (const seatId of Object.keys(map)) {
-    const seat = idx.byId.get(seatId)
-    if (seat) scores.push(positionScore(seat, cls.layout))
+    const seat = ctx.idx.byId.get(seatId)
+    if (seat) scores.push(positionScore(seat, ctx.layout))
   }
   const n = Math.max(1, scores.length)
   const sum = scores.reduce((a, b) => a + b, 0)
   const sum2 = scores.reduce((a, b) => a + b * b, 0)
   const fairness = Math.max(0, sum2 - (sum * sum) / n)
   // 重复：与本周以外的其他周对比
-  const curPairs = new Set(deskmatePairIds(cls, map).map(([a, b]) => [a, b].sort().join('|')))
+  const curPairs = new Set(deskmatePairIds(ctx, map).map(([a, b]) => [a, b].sort().join('|')))
   let repeats = 0
   for (const asg of cls.assignments) {
     if (asg.week === excludeWeek) continue
-    for (const [a, b] of deskmatePairIds(cls, asg.map)) {
+    for (const [a, b] of deskmatePairIds(ctx, asg.map)) {
       if (curPairs.has([a, b].sort().join('|'))) {
         repeats++
         break
@@ -127,6 +196,23 @@ export function weekStats(cls: ClassEntity, map: Record<string, string>, exclude
     }
   }
   return { fairness, repeats }
+}
+
+// 汇总各周的口径分组（同一生成配置的周次归为一组）
+function buildCaliber(assignments: Assignment[]): ReportConfigGroup[] {
+  const map = new Map<string, ReportConfigGroup>()
+  for (const asg of assignments) {
+    const key = snapshotKey(asg)
+    const g = map.get(key)
+    if (g) {
+      g.weeks.push(asg.week)
+    } else {
+      map.set(key, { key, legacy: !asg.gen, snap: asg.gen ?? null, weeks: [asg.week] })
+    }
+  }
+  return [...map.values()]
+    .map((g) => ({ ...g, weeks: [...g.weeks].sort((a, b) => a - b) }))
+    .sort((a, b) => a.weeks[0] - b.weeks[0])
 }
 
 export function computeFairness(cls: ClassEntity): FairnessReport {
@@ -139,9 +225,6 @@ export function computeFairness(cls: ClassEntity): FairnessReport {
   const backCount = new Map<StudentId, number>()
   const middleColCount = new Map<StudentId, number>()
 
-  const frontThird = Math.max(1, Math.ceil(cls.layout.rows / 3))
-  const mc = middleColSet(cls.layout)
-
   for (const s of cls.students) {
     cumScore.set(s.id, 0)
     frontRowsCount.set(s.id, 0)
@@ -153,38 +236,50 @@ export function computeFairness(cls: ClassEntity): FairnessReport {
   }
 
   const assignments = [...cls.assignments].sort((a, b) => a.week - b.week)
-  const hardViolations: FairnessViolation[] = []
-  for (const asg of assignments) {
-    hardViolations.push(...weekHardViolations(cls, asg.week, asg.map).map((detail) => ({ week: asg.week, detail })))
-    const seatById = new Map(cls.seats.map((s) => [s.id, s]))
-    for (const [seatId, studentId] of Object.entries(asg.map)) {
-      const seat = seatById.get(seatId)
-      if (!seat || !cumScore.has(studentId)) continue
-      cumScore.set(studentId, (cumScore.get(studentId) ?? 0) + positionScore(seat, cls.layout))
-      if (seat.row < cls.constraints.frontRows) frontRowsCount.set(studentId, (frontRowsCount.get(studentId) ?? 0) + 1)
-      if (seat.row < frontThird) frontCount.set(studentId, (frontCount.get(studentId) ?? 0) + 1)
-      else if (seat.row >= cls.layout.rows - frontThird) backCount.set(studentId, (backCount.get(studentId) ?? 0) + 1)
-      else middleCount.set(studentId, (middleCount.get(studentId) ?? 0) + 1)
-      if (mc.has(seat.col)) middleColCount.set(studentId, (middleColCount.get(studentId) ?? 0) + 1)
+
+  // 每种口径各建一套布局上下文（旧数据无快照 → 统一按当前配置回溯）
+  const ctxCache = new Map<string, CaliberCtx>()
+  const ctxFor = (asg: Assignment): CaliberCtx => {
+    const key = snapshotKey(asg)
+    let ctx = ctxCache.get(key)
+    if (!ctx) {
+      ctx = asg.gen ? ctxFromSnapshot(key, asg.gen, false) : ctxFromClass(cls)
+      ctxCache.set(key, ctx)
     }
-    for (const [a, b] of deskmatePairIds(cls, asg.map)) {
+    return ctx
+  }
+
+  const hardViolations: FairnessViolation[] = []
+  let heightViolations = 0
+  for (const asg of assignments) {
+    const ctx = ctxFor(asg)
+    hardViolations.push(
+      ...weekHardViolationsCtx(ctx, cls, asg.week, asg.map).map((detail) => ({ week: asg.week, detail })),
+    )
+    for (const [seatId, studentId] of Object.entries(asg.map)) {
+      const seat = ctx.idx.byId.get(seatId)
+      if (!seat || !cumScore.has(studentId)) continue
+      cumScore.set(studentId, (cumScore.get(studentId) ?? 0) + positionScore(seat, ctx.layout))
+      if (seat.row < ctx.frontRows) frontRowsCount.set(studentId, (frontRowsCount.get(studentId) ?? 0) + 1)
+      if (seat.row < ctx.frontThird) frontCount.set(studentId, (frontCount.get(studentId) ?? 0) + 1)
+      else if (seat.row >= ctx.layout.rows - ctx.frontThird) backCount.set(studentId, (backCount.get(studentId) ?? 0) + 1)
+      else middleCount.set(studentId, (middleCount.get(studentId) ?? 0) + 1)
+      if (ctx.middleCols.has(seat.col)) middleColCount.set(studentId, (middleColCount.get(studentId) ?? 0) + 1)
+    }
+    for (const [a, b] of deskmatePairIds(ctx, asg.map)) {
       const ma = deskCount.get(a)
       if (ma) ma.set(b, (ma.get(b) ?? 0) + 1)
       const mb = deskCount.get(b)
       if (mb) mb.set(a, (mb.get(a) ?? 0) + 1)
     }
-  }
 
-  // 身高序违背（行列模式）
-  let heightViolations = 0
-  if (cls.constraints.heightRule && cls.layout.mode === 'rows') {
-    const idx = buildSeatIndex(cls.seats, cls.layout)
-    const heightOf = new Map(cls.students.map((s) => [s.id, s.heightCm]))
-    for (const asg of assignments) {
+    // 身高序违背：仅该周生成时开启身高规则且为行列模式
+    if (ctx.heightRule && ctx.layout.mode === 'rows') {
+      const heightOf = new Map(cls.students.map((s) => [s.id, s.heightCm]))
       for (const [seatId, studentId] of Object.entries(asg.map)) {
-        const seat = idx.byId.get(seatId)
+        const seat = ctx.idx.byId.get(seatId)
         if (!seat) continue
-        const down = idx.byId.get(`r${seat.row + 1}c${seat.col}`)
+        const down = ctx.idx.byId.get(`r${seat.row + 1}c${seat.col}`)
         if (!down) continue
         const downStudent = asg.map[down.id]
         const hUp = heightOf.get(studentId)
@@ -240,9 +335,34 @@ export function computeFairness(cls: ClassEntity): FairnessReport {
     })
   }
 
+  // 口径分组与「是否仍与当前配置一致」
+  const groups = buildCaliber(assignments)
+  const primary = groups[0]
+  let currentMatches = true
+  let diffs: CaliberDiff[] = []
+  if (primary && !primary.legacy && primary.snap) {
+    const cur = currentSnapshot(cls)
+    currentMatches = isSameCaliber(primary.snap, cur)
+    if (!currentMatches) diffs = diffCaliber(primary.snap, cur)
+  }
+  const legacy = !!primary?.legacy
+  const primaryCtx = primary ? ctxCache.get(primary.key) : undefined
+
   return {
     rows,
     totalWeeks: assignments.length,
+    frontRows: primaryCtx?.frontRows ?? cls.constraints.frontRows,
+    frontThird: primaryCtx?.frontThird ?? Math.max(1, Math.ceil(cls.layout.rows / 3)),
+    layoutRows: primaryCtx?.layout.rows ?? cls.layout.rows,
+    layoutCols: primaryCtx?.layout.cols ?? cls.layout.cols,
+    caliber: {
+      groups,
+      primary,
+      mixed: groups.length > 1,
+      currentMatches,
+      diffs,
+      legacy,
+    },
     frontRowsRange,
     variance,
     std,

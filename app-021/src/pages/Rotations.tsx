@@ -252,7 +252,7 @@ export function Rotations({ classId }: { classId: string }) {
                 </dd>
               </div>
               <div>
-                <dt>前 {cls.constraints.frontRows} 排次数极差</dt>
+                <dt>前 {rep.frontRows} 排次数极差</dt>
                 <dd data-testid="front-range">{rep.frontRowsRange}</dd>
               </div>
               <div>
@@ -273,6 +273,11 @@ export function Rotations({ classId }: { classId: string }) {
             <Link className="btn btn-sm" to={`/class/${cls.id}/fairness`}>
               查看完整报告 →
             </Link>
+            <p className="muted small" data-testid="rep-caliber-note">
+              口径：{rep.layoutRows} 排 × {rep.layoutCols} 列、前 {rep.frontRows} 排、种子{' '}
+              {rep.caliber.primary.snap?.seed ?? cls.seed}
+              {!rep.caliber.currentMatches ? '（报告按生成时旧配置计算，详见报告页）' : ''}
+            </p>
           </div>
           <div className="card stat-card muted small">
             <p>拖拽两个座位即可交换（违反硬约束的交换会被拒绝）；悬停时下方实时显示交换影响。</p>

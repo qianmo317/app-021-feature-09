@@ -1,7 +1,8 @@
-import type { Assignment, ClassEntity, Student } from '../types'
+import type { Assignment, ClassEntity, GenSnapshot, Student } from '../types'
 import { InfeasibleError } from '../types'
 import { buildSeatIndex, middleColSet, type SeatIndex } from './layout'
 import { hashSeed, mulberry32 } from './rng'
+import { captureSnapshot } from './snapshot'
 
 // ================= 约束求解引擎 =================
 // 思路（对应需求 §8）：带种子的约束感知初始分配 + 模拟退火局部交换改善。
@@ -525,7 +526,7 @@ class WeekState {
     }
   }
 
-  finalize(week: number): Assignment {
+  finalize(week: number, snap: GenSnapshot): Assignment {
     const p = this.p
     const map: Record<string, string> = {}
     for (let si = 0; si < p.S; si++) {
@@ -566,18 +567,18 @@ class WeekState {
         if ((this.hist.deskCount.get(pairKey(a, b)) ?? 0) > 1) repeats++
       }
     }
-    return { week, map, score: { fairness, repeats } }
+    return { week, map, score: { fairness, repeats }, gen: snap }
   }
 }
 
-function generateOneWeek(p: Prepared, hist: History, week: number, seed: number): Assignment {
+function generateOneWeek(p: Prepared, hist: History, week: number, seed: number, snap: GenSnapshot): Assignment {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const rng = mulberry32(hashSeed(seed, week, attempt))
     const { occ, seatOf } = initPlacement(p, rng)
     const st = new WeekState(p, hist, occ, seatOf)
     st.anneal(rng)
     st.repair()
-    if (st.hardCount() === 0) return st.finalize(week)
+    if (st.hardCount() === 0) return st.finalize(week, snap)
   }
   throw new InfeasibleError(
     `第 ${week} 周无法生成满足硬约束的座位表（已尝试 ${MAX_ATTEMPTS} 次），请检查约束配置是否可行`,
@@ -589,6 +590,7 @@ function generateOneWeek(p: Prepared, hist: History, week: number, seed: number)
 /** 生成完整计划（第 1..weeks 周） */
 export function generatePlan(cls: ClassEntity, opts?: GenOptions): Assignment[] {
   const seed = opts?.seed ?? cls.seed
+  const snap = captureSnapshot(cls, seed)
   const p = prepare(cls)
   const hist: History = {
     cumScore: new Float64Array(p.n),
@@ -598,7 +600,7 @@ export function generatePlan(cls: ClassEntity, opts?: GenOptions): Assignment[] 
   }
   const out: Assignment[] = []
   for (let week = 1; week <= cls.weeks; week++) {
-    out.push(generateOneWeek(p, hist, week, seed))
+    out.push(generateOneWeek(p, hist, week, seed, snap))
   }
   return out
 }
@@ -606,12 +608,13 @@ export function generatePlan(cls: ClassEntity, opts?: GenOptions): Assignment[] 
 /** 从第 fromWeek 周起重排（保留 1..fromWeek-1 周不变） */
 export function regenerateFrom(cls: ClassEntity, fromWeek: number, opts?: GenOptions): Assignment[] {
   const seed = opts?.seed ?? cls.seed
+  const snap = captureSnapshot(cls, seed)
   const p = prepare(cls)
   const kept = cls.assignments.filter((a) => a.week < fromWeek)
   const hist = buildHistory(p, kept)
   const out = kept.map((a) => ({ ...a, map: { ...a.map }, score: { ...a.score } }))
   for (let week = Math.max(1, fromWeek); week <= cls.weeks; week++) {
-    out.push(generateOneWeek(p, hist, week, seed))
+    out.push(generateOneWeek(p, hist, week, seed, snap))
   }
   return out
 }
@@ -619,10 +622,11 @@ export function regenerateFrom(cls: ClassEntity, fromWeek: number, opts?: GenOpt
 /** 仅重新生成第 week 周（其余周保持不变） */
 export function regenerateSingleWeek(cls: ClassEntity, week: number, opts?: GenOptions): Assignment {
   const seed = opts?.seed ?? cls.seed
+  const snap = captureSnapshot(cls, seed)
   const p = prepare(cls)
   const kept = cls.assignments.filter((a) => a.week !== week && a.week < week)
   const hist = buildHistory(p, kept)
-  return generateOneWeek(p, hist, week, seed)
+  return generateOneWeek(p, hist, week, seed, snap)
 }
 
 /** 生成缺失的周次（如 weeks 从 16 调到 20） */
@@ -630,11 +634,12 @@ export function generateMissingWeeks(cls: ClassEntity, opts?: GenOptions): Assig
   const existing = cls.assignments.length
   if (existing >= cls.weeks) return cls.assignments
   const seed = opts?.seed ?? cls.seed
+  const snap = captureSnapshot(cls, seed)
   const p = prepare(cls)
   const hist = buildHistory(p, cls.assignments)
   const out = cls.assignments.map((a) => ({ ...a, map: { ...a.map }, score: { ...a.score } }))
   for (let week = existing + 1; week <= cls.weeks; week++) {
-    out.push(generateOneWeek(p, hist, week, seed))
+    out.push(generateOneWeek(p, hist, week, seed, snap))
   }
   return out
 }

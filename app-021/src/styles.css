@@ -296,3 +296,55 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand-weak)
   .topbar-note { display: none; }
   .print-sheet { width: 100%; padding: 16px; }
 }
+
+/* ---------- 公平性报告：口径卡 / 指标说明 ---------- */
+.caliber-card { border-left: 4px solid var(--brand); }
+.caliber-card h3 { color: var(--brand); display: flex; align-items: center; gap: 6px; }
+.caliber-lines { display: flex; flex-direction: column; gap: 3px; margin: 6px 0 2px; }
+.caliber-lines li { position: relative; padding-left: 14px; font-size: 13px; color: #374151; }
+.caliber-lines li::before { content: '·'; position: absolute; left: 4px; color: var(--brand); font-weight: 700; }
+
+.stale-banner {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 13px;
+}
+.stale-banner svg { flex: 0 0 auto; margin-top: 2px; }
+.stale-banner ul { margin: 4px 0; display: flex; flex-direction: column; gap: 2px; }
+.stale-banner li { list-style: none; position: relative; padding-left: 12px; }
+.stale-banner li::before { content: '–'; position: absolute; left: 0; }
+.stale-soft { border-color: var(--line); background: #f8fafc; color: var(--muted); }
+
+.mixed-caliber { margin-top: 8px; font-size: 13px; }
+.mixed-caliber summary { cursor: pointer; color: var(--brand); display: flex; align-items: center; gap: 6px; }
+.mixed-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
+.mixed-group { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.mixed-group.is-primary { border-color: var(--brand); background: var(--brand-weak); }
+.mixed-group ul { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; color: #374151; }
+.mixed-group li { font-size: 12.5px; position: relative; padding-left: 12px; }
+.mixed-group li::before { content: '·'; position: absolute; left: 4px; }
+
+/* 指标旁的问号说明 */
+.def-tip {
+  position: relative; display: inline-flex; align-items: center; vertical-align: -2px;
+  color: #9aa4b2; cursor: help; margin: 0 2px; border: 0; background: none; padding: 0;
+}
+.def-tip:hover, .def-tip:focus { color: var(--brand); outline: none; }
+.def-pop {
+  display: none; position: absolute; z-index: 40; left: 50%; bottom: calc(100% + 6px);
+  transform: translateX(-50%); width: 260px; padding: 8px 10px;
+  background: #1f2937; color: #f3f4f6; font-size: 12px; font-weight: 400; line-height: 1.5;
+  border-radius: 8px; box-shadow: 0 4px 14px rgb(0 0 0 / 0.22); white-space: normal; text-align: left;
+}
+.def-pop b { display: block; margin-top: 5px; color: #86efac; font-weight: 600; }
+.def-pop::after {
+  content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: 6px solid transparent; border-top-color: #1f2937;
+}
+.def-tip:hover .def-pop, .def-tip:focus .def-pop, .def-tip:focus-within .def-pop { display: block; }
+.legend .def-pop { width: 240px; }
+th .def-pop { width: 250px; }
+
+.stat-good { display: block; color: var(--good); font-size: 11.5px; margin-top: 2px; line-height: 1.4; }
+.stat-label { display: inline-flex; align-items: center; flex-wrap: wrap; }
+.legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
