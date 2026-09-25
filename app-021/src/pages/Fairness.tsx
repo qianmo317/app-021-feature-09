@@ -3,6 +3,7 @@ import { Link } from '../router'
 import { useStore } from '../store'
 import { computeFairness } from '../lib/fairness'
 import { downloadCSV, fairnessCSV } from '../lib/csv'
+import { configLabel, metricDefs, reportConfigMeta, type MetricDef } from '../lib/methodology'
 import { AlertTriangle, ArrowLeft, BarChart3, CheckCircle2, Download } from 'lucide-react'
 
 export function Fairness({ classId }: { classId: string }) {
@@ -21,6 +22,15 @@ export function Fairness({ classId }: { classId: string }) {
 
   const nameById = new Map(cls.students.map((s) => [s.id, s.name]))
   const maxWeeks = Math.max(1, report.totalWeeks)
+
+  // 统计口径：指标定义/算法与本报告所用配置（唯一事实来源在 lib/methodology.ts）
+  const meta = reportConfigMeta(cls)
+  const defs = metricDefs(meta.current)
+  const defOf = (id: string): MetricDef => defs.find((d) => d.id === id)!
+  const hasData = report.totalWeeks > 0
+  const classAvg = hasData && report.rows.length
+    ? report.rows.reduce((a, r) => a + r.avgScore, 0) / report.rows.length
+    : null
 
   const exportCsv = () => downloadCSV(`${cls.name}-公平性统计.csv`, fairnessCSV(cls, report))
 
@@ -45,15 +55,50 @@ export function Fairness({ classId }: { classId: string }) {
         </nav>
       </div>
 
-      <div className="explainer card">
+      <div className="explainer card" data-testid="methodology">
         <h3>
-          <BarChart3 size={16} /> 公平性依据（可向家长解释）
+          <BarChart3 size={16} /> 统计口径与指标说明（可向家长解释）
         </h3>
-        <p>
-          <b>位置分</b> = 前后排权重(0~2，越小越靠前) + 中间度权重(0~1，越小越靠中间)，<b>分数越低位置越好</b>。
-          引擎在满足硬约束（视力/听力/行动不便/固定座位/必须分开）的前提下，最小化「每人累计位置分与平均分之差的平方和」，
-          使<b>每个人坐好位置的机会均等</b>；同时统计每人「前 {cls.constraints.frontRows} 排」的次数，次数极差越小越公平。
+        <p className="config-line" data-testid="report-config">
+          本报告所用配置：<b>{configLabel(meta.current)}</b>
+          {hasData && meta.generated && !meta.stale && <span className="muted">（与轮换结果生成时配置一致）</span>}
+          {hasData && meta.generated && meta.stale && (
+            <>
+              ；轮换结果生成时配置：<b>{configLabel(meta.generated)}</b>
+            </>
+          )}
         </p>
+        {hasData && meta.stale && meta.generated && (
+          <p className="warn-text" data-testid="config-stale">
+            配置已变更：以下数据是在早先配置（{configLabel(meta.generated)}）下生成的，与当前配置不一致，
+            本报告仍按生成时的数据与当前口径统计，建议重新生成后再引用。
+          </p>
+        )}
+        {hasData && !meta.generated && (
+          <p className="muted small" data-testid="config-unknown">
+            该轮换结果生成时未记录配置快照（旧版本或导入的数据），统计按当前配置口径。
+          </p>
+        )}
+        <p>
+          生成引擎在满足硬约束（视力/听力/行动不便/固定座位/必须分开）的前提下，最小化「每人累计位置分与平均分之差的平方和」，
+          使<b>每个人坐好位置的机会均等</b>。各指标定义如下：
+        </p>
+        <dl className="metric-defs">
+          {defs.map((m) => (
+            <div className="metric-def" key={m.id} data-testid={`metric-${m.id}`}>
+              <dt>{m.name}</dt>
+              <dd>
+                {m.definition} <span className="muted">算法：{m.algorithm}</span>{' '}
+                <span className="muted">解读：{m.reading}</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {classAvg !== null && (
+          <p className="muted small" data-testid="class-avg">
+            参考基准：本班全班平均位置分 {classAvg.toFixed(2)}，个人平均位置分越接近它越公平。
+          </p>
+        )}
       </div>
 
       {report.totalWeeks === 0 ? (
@@ -71,36 +116,42 @@ export function Fairness({ classId }: { classId: string }) {
                 {report.totalWeeks}
               </span>
               <span className="stat-label">统计周数</span>
+              <span className="stat-def">{defOf('weeks').short}</span>
             </div>
             <div className="card stat">
               <span className={`stat-num ${report.hardViolations.length ? 'bad' : 'good'}`} data-testid="fair-hard">
                 {report.hardViolations.length === 0 ? '0 ✓' : report.hardViolations.length}
               </span>
               <span className="stat-label">硬约束违反</span>
+              <span className="stat-def">{defOf('hard').short}</span>
             </div>
             <div className="card stat">
               <span className={`stat-num ${report.frontRowsRange > 3 ? 'warn' : ''}`} data-testid="fair-range">
                 {report.frontRowsRange}
               </span>
               <span className="stat-label">前 {cls.constraints.frontRows} 排次数极差（目标 ≤ 3）</span>
+              <span className="stat-def">{defOf('front-rows').short}</span>
             </div>
             <div className="card stat">
               <span className="stat-num" data-testid="fair-variance">
                 {report.variance.toFixed(1)}
               </span>
               <span className="stat-label">位置分 Σ偏差²</span>
+              <span className="stat-def">{defOf('variance').short}</span>
             </div>
             <div className="card stat">
               <span className={`stat-num ${report.deskmateOverLimit.length ? 'warn' : ''}`} data-testid="fair-desk">
                 {report.deskmateOverLimit.length}
               </span>
               <span className="stat-label">同桌超 2 次的对</span>
+              <span className="stat-def">{defOf('deskmate').short}</span>
             </div>
             <div className="card stat">
               <span className="stat-num" data-testid="fair-height">
                 {report.heightViolations}
               </span>
               <span className="stat-label">身高序违背{cls.constraints.heightRule ? '' : '（未启用）'}</span>
+              <span className="stat-def">{defOf('height').short}</span>
             </div>
           </div>
 
@@ -163,12 +214,18 @@ export function Fairness({ classId }: { classId: string }) {
                     <th>姓名</th>
                     <th>身高</th>
                     <th>视力</th>
-                    <th>前 {cls.constraints.frontRows} 排次数</th>
-                    <th>前/中/后</th>
-                    <th>中间列次数</th>
-                    <th>平均位置分</th>
-                    <th>最常同桌</th>
-                    <th>同桌次数</th>
+                    <th title={`${defOf('front-rows').definition} ${defOf('front-rows').algorithm}`}>
+                      前 {cls.constraints.frontRows} 排次数
+                    </th>
+                    <th title={`${defOf('front-middle-back').definition} ${defOf('front-middle-back').algorithm}`}>
+                      前/中/后
+                    </th>
+                    <th title={`${defOf('middle-col').definition} ${defOf('middle-col').algorithm}`}>中间列次数</th>
+                    <th title={`${defOf('position-score').definition} ${defOf('position-score').algorithm}`}>
+                      平均位置分
+                    </th>
+                    <th title={defOf('deskmate').definition}>最常同桌</th>
+                    <th title={defOf('deskmate').definition}>同桌次数</th>
                     <th>警告</th>
                   </tr>
                 </thead>

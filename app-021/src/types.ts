@@ -54,6 +54,16 @@ export interface LayoutConfig {
   doorSide: 'left' | 'right'
 }
 
+// 公平性报告的「口径配置」：这些参数决定了每个数字的定义与算法
+// （前排按前几排计、位置分如何加权、数据由哪个种子/周数生成）
+export interface ReportConfig {
+  rows: number // 座位行数
+  cols: number // 座位列数
+  frontRows: number // 「前排」按前几排计
+  weeks: number // 计划周数
+  seed: number // 随机种子
+}
+
 export interface ClassEntity {
   id: string
   name: string
@@ -66,6 +76,9 @@ export interface ClassEntity {
   weeks: number
   seed: number
   assignments: Assignment[]
+  // 最近一次生成轮换结果时的口径配置快照；旧数据/导入数据可能缺省。
+  // 配置改过之后，报告据此看出数据用的是早先那套口径。
+  genConfig?: ReportConfig
 }
 
 export interface GenParams {

@@ -11,6 +11,7 @@ import {
   regenerateSingleWeek,
 } from './lib/engine'
 import { previewSwap } from './lib/fairness'
+import { reportConfigOf } from './lib/methodology'
 
 // ================= 集中式状态：所有业务逻辑在 Store，组件只做展示与派发 =================
 
@@ -180,6 +181,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             break
         }
         working.assignments = assignments
+        // 记录本次生成所用的口径配置，公平性报告据此说明「这份报告用的是哪套算法」
+        working.genConfig = reportConfigOf(working)
         await persist(working)
         return { ok: true }
       } catch (e) {

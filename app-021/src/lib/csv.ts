@@ -1,6 +1,7 @@
 import type { ClassEntity } from '../types'
 import type { FairnessReport } from './fairness'
 import { buildSeatIndex } from './layout'
+import { methodologyCommentLines } from './methodology'
 
 // CSV 导出（带 BOM，Excel 直接打开不乱码）
 export function toCSV(rows: (string | number)[][]): string {
@@ -22,8 +23,11 @@ export function downloadCSV(filename: string, rows: (string | number)[][]): void
 }
 
 // 全班统计表（导出给家长看）
+// 表头自带「# 」注释行：每个指标的定义、算法与本报告所用配置，
+// 拿出去只有数字没有依据的问题由注释行兜底（Excel 中显示为文本行）。
 export function fairnessCSV(cls: ClassEntity, report: FairnessReport): (string | number)[][] {
   const rows: (string | number)[][] = []
+  for (const line of methodologyCommentLines(cls)) rows.push([`# ${line}`])
   rows.push([`班级：${cls.name}`])
   rows.push([`统计周数：${report.totalWeeks}`])
   rows.push([
@@ -59,7 +63,6 @@ export function fairnessCSV(cls: ClassEntity, report: FairnessReport): (string |
     ])
   }
   rows.push([])
-  rows.push(['位置分说明：位置分 = 前后排权重(0~2，越小越靠前) + 中间度权重(0~1，越小越靠中间)，分数越低位置越好'])
   if (report.deskmateOverLimit.length) {
     rows.push(['同桌超限对：', ...report.deskmateOverLimit.map((d) => `${d.a}-${d.b}(${d.count}次)`)])
   }
